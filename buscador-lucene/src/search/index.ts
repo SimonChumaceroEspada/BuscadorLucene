@@ -1,10 +1,12 @@
-import * as lucene from "lucene";
+import lunr from "lunr";
 import { query } from "../db/database";
 import { extractText, FILES_DIR } from "../files/extractText";
 import fs from "fs-extra";
 import path from "path";
 
-let index: any[] = [];
+let documents: any[] = [];
+let index: lunr.Index;
+let isIndexReady = false;
 
 async function indexDatabase() {
   const tablesRes = await query(`
@@ -17,10 +19,11 @@ async function indexDatabase() {
     const dataRes = await query(`SELECT * FROM ${table_name}`);
 
     for (const row of dataRes.rows) {
-      index.push({
+      documents.push({
+        id: `${table_name}-${row.id}`,
         type: "database",
         table: table_name,
-        ...row,
+        content: JSON.stringify(row),
       });
     }
   }
@@ -33,19 +36,56 @@ async function indexFiles() {
     const filePath = path.join(FILES_DIR, file);
     const text = await extractText(filePath);
 
-    index.push({
+    documents.push({
+      id: `file-${file}`,
       type: "file",
       fileName: file,
-      text,
-      path: filePath,
+      content: text,
     });
   }
+}
+
+async function createIndex() {
+  index = lunr(function () {
+    this.ref("id");
+    this.field("content");
+
+    documents.forEach((doc) => this.add(doc));
+  });
+
+  console.log(`Se indexaron ${documents.length} elementos.`);
+  isIndexReady = true;
 }
 
 async function indexAll() {
   await indexDatabase();
   await indexFiles();
-  console.log(`Se indexaron ${index.length} elementos.`);
+  await createIndex();
 }
 
-indexAll();
+// Start indexing but don't wait for it to complete here
+const indexingPromise = indexAll();
+
+function getIndex() {
+  if (!isIndexReady) {
+    throw new Error("El índice aún no está listo. Por favor espere.");
+  }
+  return index;
+}
+
+function getDocuments() {
+  if (!isIndexReady) {
+    throw new Error("El índice aún no está listo. Por favor espere.");
+  }
+  return documents;
+}
+
+// Export a function to wait for index to be ready
+async function waitForIndex() {
+  if (!isIndexReady) {
+    await indexingPromise;
+  }
+  return true;
+}
+
+export { getIndex, getDocuments, waitForIndex, isIndexReady };
